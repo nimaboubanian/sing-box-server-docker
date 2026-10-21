@@ -159,9 +159,23 @@ case_client() {
     has    "unknown user named"   "$LAST_OUT" "nobody"
 }
 
+case_www() {
+    echo "=== STATIC WEBSITE CASES ==="
+    local www_dir="$HERE/../www"
+    ok    "index.html exists"       test -s "$www_dir/index.html"
+    ok    "404.html exists"         test -s "$www_dir/404.html"
+    has   "index.html is fa"        "$(cat "$www_dir/index.html" 2>/dev/null || true)" 'lang="fa"'
+    has   "index.html is rtl"       "$(cat "$www_dir/index.html" 2>/dev/null || true)" 'dir="rtl"'
+    lacks "index.html no http://"   "$(cat "$www_dir/index.html" 2>/dev/null || true)" 'http://'
+    lacks "index.html no https://"  "$(cat "$www_dir/index.html" 2>/dev/null || true)" 'https://'
+    has   "404.html is rtl"         "$(cat "$www_dir/404.html" 2>/dev/null || true)" 'dir="rtl"'
+    lacks "404.html no https://"    "$(cat "$www_dir/404.html" 2>/dev/null || true)" 'https://'
+}
+
 case_validate
 case_render
 case_client
+case_www
 
 if [ "$fail" -ne 0 ]; then
     echo "FAILED" >&2
