@@ -172,10 +172,74 @@ case_www() {
     lacks "404.html no https://"    "$(cat "$www_dir/404.html" 2>/dev/null || true)" 'https://'
 }
 
+case_scripts_local() {
+    echo "=== LOCAL SCRIPT & REPORT REDACTION CASES ==="
+    ok "entrypoint.sh syntax" bash -n "$HERE/entrypoint.sh"
+    ok "report.sh syntax"     bash -n "$HERE/report.sh"
+    ok "test-render.sh syntax" bash -n "$HERE/test-render.sh"
+
+    local tmpdir rep_out key_body
+    tmpdir="$(mktemp -d)"
+    openssl req -x509 -newkey rsa:2048 -nodes -days 1 -sha256 \
+        -keyout "$tmpdir/key.pem" -out "$tmpdir/cert.pem" \
+        -subj "/CN=domain.example" \
+        -addext "subjectAltName=DNS:domain.example,DNS:www.domain.example" 2>/dev/null
+    key_body="$(head -n 2 "$tmpdir/key.pem" | tail -n 1)"
+    rep_out="$(env "${FIX_ENV[@]}" ACME_DIR="$tmpdir" bash "$HERE/report.sh" 2>&1 || true)"
+    has   "report has TLS section"       "$rep_out" "== TLS Certificates =="
+    has   "report shows cert CN"         "$rep_out" "domain.example"
+    has   "report lists user alice"      "$rep_out" "client-conf alice"
+    lacks "report hides alice password"  "$rep_out" "s3cret"
+    lacks "report hides bob password"    "$rep_out" "hunter2"
+    lacks "report hides private key"     "$rep_out" "$key_body"
+    rm -rf "$tmpdir"
+}
+
+docker_cases() {
+    echo "=== DOCKER LIVE CASES ==="
+    local cid=""
+    cid="$(docker run -d --rm -e BOOT_STAGE=up-only "${FIX_DE[@]}" "$IMG")" || { echo "docker run: FAIL"; fail=1; return; }
+
+    local i ready=0
+    for i in $(seq 1 30); do
+        if docker exec "$cid" bash -c 'exec 3<>/dev/tcp/127.0.0.1/80 && exec 4<>/dev/tcp/127.0.0.1/443 && exec 5<>/dev/tcp/127.0.0.1/1065 && exec 6<>/dev/tcp/127.0.0.1/8080' 2>/dev/null; then
+            ready=1
+            break
+        fi
+        sleep 0.5
+    done
+    [ "$ready" -eq 1 ] && echo "container sockets ready: PASS" || { echo "container sockets ready: FAIL"; fail=1; }
+
+    local http_redir
+    http_redir="$(docker exec "$cid" curl -sI http://127.0.0.1/ 2>&1 || true)"
+    has "http redirects 301" "$http_redir" "301 Moved Permanently"
+    has "http redirect location" "$http_redir" "https://"
+
+    local https_out
+    https_out="$(docker exec "$cid" curl -sk --resolve domain.example:443:127.0.0.1 https://domain.example/ 2>&1 || true)"
+    has "https fallback serves fa" "$https_out" 'lang="fa"'
+    has "https fallback serves rtl" "$https_out" 'dir="rtl"'
+
+    local rep_out
+    rep_out="$(docker exec "$cid" report.sh 2>&1 || true)"
+    has   "report shows sing-box UP" "$rep_out" "sing-box: UP"
+    has   "report shows nginx UP"    "$rep_out" "nginx: UP"
+    has   "report shows cert CN"     "$rep_out" "domain.example"
+    has   "report lists user alice"  "$rep_out" "client-conf alice"
+    lacks "report hides password"    "$rep_out" "$PASS1"
+
+    docker stop -t 2 "$cid" >/dev/null 2>&1 || true
+}
+
 case_validate
 case_render
 case_client
 case_www
+case_scripts_local
+
+if [ "$MODE" != "local" ]; then
+    docker_cases
+fi
 
 if [ "$fail" -ne 0 ]; then
     echo "FAILED" >&2

@@ -387,9 +387,114 @@ cmd_client_conf() {
     fi
 }
 
+ensure_test_cert() {
+    if [ "${BOOT_STAGE:-}" = "up-only" ] && [ ! -f "$ACME_DIR/cert.pem" ]; then
+        log "BOOT_STAGE=up-only: generating self-signed certificate for $APEX_DOMAIN and $WWW_DOMAIN"
+        mkdir -p "$ACME_DIR"
+        chmod 700 "$ACME_DIR"
+        openssl req -x509 -newkey rsa:2048 -nodes -days 1 -sha256 \
+            -keyout "$ACME_DIR/key.pem" \
+            -out "$ACME_DIR/cert.pem" \
+            -subj "/CN=$APEX_DOMAIN" \
+            -addext "subjectAltName=DNS:$APEX_DOMAIN,DNS:$WWW_DOMAIN" >/dev/null 2>&1
+        chmod 600 "$ACME_DIR/key.pem" "$ACME_DIR/cert.pem"
+    fi
+}
+
+render_configs() {
+    mkdir -p /etc/nginx /run/nginx /etc/sing-box "$ACME_DIR"
+    render_nginx_conf > /etc/nginx/nginx.conf
+    chmod 644 /etc/nginx/nginx.conf
+    render_singbox_conf > /etc/sing-box/config.json
+    chmod 600 /etc/sing-box/config.json
+    if command -v sing-box >/dev/null 2>&1; then
+        sing-box check -c /etc/sing-box/config.json || fatal "sing-box config validation failed"
+    fi
+    if command -v nginx >/dev/null 2>&1; then
+        nginx -t -c /etc/nginx/nginx.conf >/dev/null 2>&1 || fatal "nginx config validation failed"
+    fi
+}
+
+declare -A CHILD_PIDS=()
+
+child_dead() {
+    local pid="${CHILD_PIDS[$1]:-}"
+    [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null
+}
+
+wait_for_port() {
+    local host="$1" port="$2" max_secs="$3" i
+    for i in $(seq 1 "$((max_secs * 2))"); do
+        if (exec 3<>/dev/tcp/"$host"/"$port") 2>/dev/null; then
+            exec 3<&- 3>&-
+            return 0
+        fi
+        sleep 0.5
+    done
+    return 1
+}
+
+start_nginx() {
+    log "starting nginx"
+    nginx -g "daemon off;" &
+    CHILD_PIDS[nginx]=$!
+    wait_for_port 127.0.0.1 "$HTTP_PORT" 10 || { log "FATAL: nginx never bound port $HTTP_PORT"; exit 1; }
+    wait_for_port 127.0.0.1 "$FALLBACK_PORT" 5 || { log "FATAL: nginx never bound fallback port $FALLBACK_PORT"; exit 1; }
+    log "nginx up (ports $HTTP_PORT, $FALLBACK_PORT ready)"
+}
+
+start_singbox() {
+    log "starting sing-box"
+    sing-box run -c /etc/sing-box/config.json &
+    CHILD_PIDS[sing-box]=$!
+    wait_for_port 127.0.0.1 "$SOCKS_PORT" 15 || { log "FATAL: sing-box never bound socks port $SOCKS_PORT"; exit 1; }
+    if [ -f "$ACME_DIR/cert.pem" ]; then
+        wait_for_port 127.0.0.1 "$HTTPS_PORT" 10 || { log "FATAL: sing-box never bound https port $HTTPS_PORT"; exit 1; }
+    fi
+    log "sing-box up (socks port $SOCKS_PORT ready)"
+}
+
+restart_child() {
+    case "$1" in
+        nginx)    start_nginx ;;
+        sing-box) start_singbox ;;
+    esac
+}
+
+supervise() {
+    local deaths=0 name
+    trap 'shutdown' TERM INT
+    while true; do
+        wait -n 2>/dev/null || true
+        for name in "${!CHILD_PIDS[@]}"; do
+            child_dead "$name" || continue
+            deaths=$((deaths + 1))
+            log "child '$name' died (deaths since boot: $deaths) — restarting"
+            restart_child "$name" || exit 1
+            if [ "$deaths" -ge 3 ]; then
+                log "FATAL: $deaths child deaths since boot — giving up"
+                exit 1
+            fi
+        done
+    done
+}
+
+shutdown() {
+    log "shutting down"
+    local pid
+    for pid in "${CHILD_PIDS[@]}"; do
+        kill "$pid" 2>/dev/null || true
+    done
+    exit 0
+}
+
 main() {
     validate_env
-    # Stub for Task 1; implemented in Task 4
+    ensure_test_cert
+    render_configs
+    start_nginx
+    start_singbox
+    supervise
 }
 
 case "${1:-main}" in
