@@ -40,7 +40,7 @@ sing-box ACME (:8081)                                       │ nginx:8080  │
 
 ### Highlights
 - **No TUN or Kernel Privileges Required:** Unlike L3 packet tunnels (`ipsec`, `wireguard`, `amneziawg`, `openvpn`), `sing-box` is an L4 stream proxy. The container requires **no `NET_ADMIN`**, **no `/dev/net/tun`**, and **no kernel `sysctl` modifications**.
-- **Automated Let's Encrypt TLS:** Built-in ACME certificate issuance and auto-renewal for both the apex domain (`<domain>`) and `www.<domain>`.
+- **Automated Let's Encrypt TLS:** Built-in ACME certificate issuance and auto-renewal for the root domain (`<domain>`).
 - **Anti-Censorship & DPI Camouflage:** Browser handshakes and active probes negotiate standard TLS (`http/1.1`) and receive an authentic RTL Persian maintenance website (`www/index.html`) without leaking proxy signatures.
 - **Port 80 Cooperation:** `nginx` handles public HTTP on port 80, routing ACME HTTP-01 challenges internally to `sing-box` on port 8081 and redirecting all other HTTP traffic to HTTPS (`301 Moved Permanently`).
 - **Loopback SOCKS5:** Exposes `127.0.0.1:1065` locally, forwarding plain SOCKS5 traffic directly into the router.
@@ -53,7 +53,7 @@ Copy `.env.example` to `.env` and fill in:
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `TLS_DOMAIN` | **Yes** | — | Domain name pointing to your server's public IP. Automatically stripped of leading `www.` and certificates issued for both `<domain>` and `www.<domain>`. |
+| `TLS_DOMAIN` | **Yes** | — | Domain name pointing to your server's public IP. Automatically stripped of leading `www.` and certificates issued for `<domain>`. |
 | `TLS_USERS` | **Yes** | — | Comma-separated `username:password` pairs (e.g. `alice:secret1,bob:secret2`). Colons inside passwords are supported. |
 | `TLS_EMAIL` | No | `""` | Optional email for Let's Encrypt certificate expiration alerts. |
 | `CHAIN_SOCKS_HOST` | No | `vpndogs-router` | Upstream socks router service name. |

@@ -51,7 +51,6 @@ normalize_domain() {
         fatal "TLS_DOMAIN must be a valid fully-qualified domain name (FQDN): $raw"
     fi
     APEX_DOMAIN="$raw"
-    WWW_DOMAIN="www.${APEX_DOMAIN}"
 }
 
 # Parse users list: user:pass,user2:pass2
@@ -147,7 +146,7 @@ http {
     # Public HTTP: ACME HTTP-01 challenge proxy + HTTPS redirect
     server {
         listen 0.0.0.0:${HTTP_PORT} default_server;
-        server_name ${APEX_DOMAIN} ${WWW_DOMAIN} _;
+        server_name ${APEX_DOMAIN} _;
 
         location ^~ /.well-known/acme-challenge/ {
             proxy_pass http://127.0.0.1:${ACME_HTTP_PORT};
@@ -163,7 +162,7 @@ http {
     # Internal Loopback: Persian fake static website fallback
     server {
         listen 127.0.0.1:${FALLBACK_PORT} default_server;
-        server_name ${APEX_DOMAIN} ${WWW_DOMAIN} _;
+        server_name ${APEX_DOMAIN} _;
 
         root /var/www/html;
         index index.html;
@@ -203,7 +202,6 @@ render_singbox_conf() {
         --argjson fallback_port "$FALLBACK_PORT" \
         --argjson socks_port "$SOCKS_PORT" \
         --arg apex_domain "$APEX_DOMAIN" \
-        --arg www_domain "$WWW_DOMAIN" \
         --arg chain_host "$CHAIN_SOCKS_HOST" \
         --argjson chain_port "$CHAIN_SOCKS_PORT" \
         --arg acme_dir "$ACME_DIR" \
@@ -295,7 +293,7 @@ render_singbox_conf() {
               {
                 "type": "acme",
                 "tag": "letsencrypt",
-                "domain": [$apex_domain, $www_domain],
+                "domain": [$apex_domain],
                 "data_directory": $acme_dir,
                 "alternative_http_port": $acme_alt_port
               } + (
@@ -406,14 +404,14 @@ cmd_client_conf() {
 
 ensure_test_cert() {
     if [ "${BOOT_STAGE:-}" = "up-only" ] && [ ! -f "$ACME_DIR/cert.pem" ]; then
-        log "BOOT_STAGE=up-only: generating self-signed certificate for $APEX_DOMAIN and $WWW_DOMAIN"
+        log "BOOT_STAGE=up-only: generating self-signed certificate for $APEX_DOMAIN"
         mkdir -p "$ACME_DIR"
         chmod 700 "$ACME_DIR"
         openssl req -x509 -newkey rsa:2048 -nodes -days 1 -sha256 \
             -keyout "$ACME_DIR/key.pem" \
             -out "$ACME_DIR/cert.pem" \
             -subj "/CN=$APEX_DOMAIN" \
-            -addext "subjectAltName=DNS:$APEX_DOMAIN,DNS:$WWW_DOMAIN" >/dev/null 2>&1
+            -addext "subjectAltName=DNS:$APEX_DOMAIN" >/dev/null 2>&1
         chmod 600 "$ACME_DIR/key.pem" "$ACME_DIR/cert.pem"
     fi
 }

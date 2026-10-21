@@ -113,13 +113,13 @@ case_render() {
     has "nginx try_files =404"            "$ng" 'try_files $uri $uri/ =404;'
     lacks "nginx no index fallback"       "$ng" '/index.html =404'
     has "nginx listens on 127.0.0.1:8080" "$ng" "listen 127.0.0.1:8080 default_server;"
-    has "nginx server_name apex+www"      "$ng" "server_name domain.example www.domain.example _;"
+    has "nginx server_name apex"          "$ng" "server_name domain.example _;"
     has "nginx proxies acme challenge"    "$ng" "proxy_pass http://127.0.0.1:8081;"
     has "nginx redirects to https"        "$ng" 'return 301 https://$host$request_uri;'
 
     assert_jq "trojan listen 0.0.0.0" '(.inbounds[] | select(.tag=="trojan-in") | .listen) == "0.0.0.0"' "$sb"
     assert_jq "acme provider type"   '.certificate_providers[0].type == "acme"' "$sb"
-    assert_jq "acme domains"         '.certificate_providers[0].domain == ["domain.example", "www.domain.example"]' "$sb"
+    assert_jq "acme domains"         '.certificate_providers[0].domain == ["domain.example"]' "$sb"
     assert_jq "acme alt http port"   '.certificate_providers[0].alternative_http_port == 8081' "$sb"
     assert_jq "acme email omitted"   '(.certificate_providers[0] | has("email")) == false' "$sb"
     assert_jq "trojan listen_port"   '(.inbounds[] | select(.tag=="trojan-in") | .listen_port) == 443' "$sb"
@@ -137,7 +137,7 @@ case_render() {
     # www. normalization + TLS_EMAIL
     out="$(run_env "TLS_DOMAIN=www.Sub.Example.com" "TLS_EMAIL=ops@example.com" render)"
     sb="$(block "sing-box/config.json" "$out")"
-    assert_jq "www stripped to apex" '.certificate_providers[0].domain == ["sub.example.com", "www.sub.example.com"]' "$sb"
+    assert_jq "www stripped to apex" '.certificate_providers[0].domain == ["sub.example.com"]' "$sb"
     assert_jq "acme email set"       '.certificate_providers[0].email == "ops@example.com"' "$sb"
 
     # Static cert mode when cert.pem + key.pem exist in ACME_DIR
@@ -194,7 +194,7 @@ case_scripts_local() {
     openssl req -x509 -newkey rsa:2048 -nodes -days 1 -sha256 \
         -keyout "$tmpdir/key.pem" -out "$tmpdir/cert.pem" \
         -subj "/CN=domain.example" \
-        -addext "subjectAltName=DNS:domain.example,DNS:www.domain.example" 2>/dev/null
+        -addext "subjectAltName=DNS:domain.example" 2>/dev/null
     key_body="$(head -n 2 "$tmpdir/key.pem" | tail -n 1)"
     rep_out="$(env "${FIX_ENV[@]}" ACME_DIR="$tmpdir" bash "$HERE/report.sh" 2>&1 || true)"
     has   "report has TLS section"       "$rep_out" "== TLS Certificates =="
