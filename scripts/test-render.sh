@@ -105,11 +105,19 @@ case_render() {
     sb="$(block "sing-box/config.json" "$out")"
 
     has "nginx listens on 0.0.0.0:80"     "$ng" "listen 0.0.0.0:80 default_server;"
+    lacks "nginx no ipv6 listen"          "$ng" "listen [::]"
+    has "nginx error_log stderr"          "$ng" "error_log stderr warn;"
+    has "nginx access_log off"            "$ng" "access_log off;"
+    has "nginx server_tokens off"         "$ng" "server_tokens off;"
+    has "nginx charset utf-8"             "$ng" "charset utf-8;"
+    has "nginx try_files =404"            "$ng" 'try_files $uri $uri/ =404;'
+    lacks "nginx no index fallback"       "$ng" '/index.html =404'
     has "nginx listens on 127.0.0.1:8080" "$ng" "listen 127.0.0.1:8080 default_server;"
     has "nginx server_name apex+www"      "$ng" "server_name domain.example www.domain.example _;"
     has "nginx proxies acme challenge"    "$ng" "proxy_pass http://127.0.0.1:8081;"
     has "nginx redirects to https"        "$ng" 'return 301 https://$host$request_uri;'
 
+    assert_jq "trojan listen 0.0.0.0" '(.inbounds[] | select(.tag=="trojan-in") | .listen) == "0.0.0.0"' "$sb"
     assert_jq "acme provider type"   '.certificate_providers[0].type == "acme"' "$sb"
     assert_jq "acme domains"         '.certificate_providers[0].domain == ["domain.example", "www.domain.example"]' "$sb"
     assert_jq "acme alt http port"   '.certificate_providers[0].alternative_http_port == 8081' "$sb"
@@ -192,6 +200,15 @@ case_scripts_local() {
     lacks "report hides alice password"  "$rep_out" "s3cret"
     lacks "report hides bob password"    "$rep_out" "hunter2"
     lacks "report hides private key"     "$rep_out" "$key_body"
+
+    # Test nested sub-directory cert discovery (CertMagic production layout)
+    mkdir -p "$tmpdir/certificates/sub"
+    cp "$tmpdir/cert.pem" "$tmpdir/certificates/sub/deep.crt"
+    rm -f "$tmpdir/cert.pem"
+    rep_out="$(env "${FIX_ENV[@]}" ACME_DIR="$tmpdir" bash "$HERE/report.sh" 2>&1 || true)"
+    has   "report discovers nested cert" "$rep_out" "deep.crt"
+    has   "nested cert shows CN"         "$rep_out" "domain.example"
+
     rm -rf "$tmpdir"
 }
 

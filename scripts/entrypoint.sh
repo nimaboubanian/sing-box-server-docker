@@ -128,7 +128,7 @@ validate_env() {
 render_nginx_conf() {
     cat <<EOF
 worker_processes auto;
-error_log /var/log/nginx/error.log warn;
+error_log stderr warn;
 pid /run/nginx/nginx.pid;
 
 events {
@@ -137,15 +137,16 @@ events {
 
 http {
     include /etc/nginx/mime.types;
-    default_type application/octet-stream;
+    default_type text/html;
+    access_log off;
+    server_tokens off;
     sendfile on;
     keepalive_timeout 65;
-    access_log /var/log/nginx/access.log;
+    charset utf-8;
 
     # Public HTTP: ACME HTTP-01 challenge proxy + HTTPS redirect
     server {
         listen 0.0.0.0:${HTTP_PORT} default_server;
-        listen [::]:${HTTP_PORT} default_server;
         server_name ${APEX_DOMAIN} ${WWW_DOMAIN} _;
 
         location ^~ /.well-known/acme-challenge/ {
@@ -168,7 +169,7 @@ http {
         index index.html;
 
         location / {
-            try_files \$uri \$uri/ /index.html =404;
+            try_files \$uri \$uri/ =404;
         }
 
         error_page 404 /404.html;
@@ -220,7 +221,7 @@ render_singbox_conf() {
         {
           "type": "trojan",
           "tag": "trojan-in",
-          "listen": "::",
+          "listen": "0.0.0.0",
           "listen_port": $https_port,
           "tcp_fast_open": false,
           "users": $users,

@@ -30,8 +30,7 @@ echo ""
 echo "== TLS Certificates =="
 if [ -d "$ACME_DIR" ]; then
     found=0
-    for cert_file in "$ACME_DIR"/*.crt "$ACME_DIR"/*.pem; do
-        [ -f "$cert_file" ] || continue
+    while IFS= read -r -d '' cert_file; do
         # Skip private keys
         case "$(basename "$cert_file")" in
             *key*|*Key*) continue ;;
@@ -43,7 +42,7 @@ if [ -d "$ACME_DIR" ]; then
             openssl x509 -in "$cert_file" -noout -subject -issuer -dates -ext subjectAltName 2>/dev/null || true
             echo ""
         fi
-    done
+    done < <(find "$ACME_DIR" -type f \( -name "*.crt" -o -name "*.pem" \) -print0 2>/dev/null)
     if [ "$found" -eq 0 ]; then
         echo "No certificates found in $ACME_DIR"
     fi
