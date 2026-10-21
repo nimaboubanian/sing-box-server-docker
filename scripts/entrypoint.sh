@@ -268,12 +268,22 @@ render_singbox_conf() {
           "server": $chain_host,
           "server_port": $chain_port,
           "version": "5"
+        },
+        {
+          "type": "direct",
+          "tag": "direct"
         }
       ],
       "route": {
         "auto_detect_interface": false,
         "final": "chain-out",
-        "rules": []
+        "rules": [
+          {
+            "ip_cidr": ["127.0.0.1/32"],
+            "port": [$fallback_port],
+            "outbound": "direct"
+          }
+        ]
       }
     } + (
       if $has_static == 1 then

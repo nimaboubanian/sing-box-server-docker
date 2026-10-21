@@ -131,6 +131,8 @@ case_render() {
     assert_jq "socks inbound 1065"   '(.inbounds[] | select(.tag=="socks-in") | .listen_port) == 1065' "$sb"
     assert_jq "chain-out server"     '(.outbounds[] | select(.tag=="chain-out") | .server) == "vpndogs-router"' "$sb"
     assert_jq "chain-out port"       '(.outbounds[] | select(.tag=="chain-out") | .server_port) == 1070' "$sb"
+    assert_jq "direct outbound exists" '(.outbounds[] | select(.tag=="direct") | .type) == "direct"' "$sb"
+    assert_jq "fallback routed direct" '(.route.rules[0].outbound == "direct" and .route.rules[0].ip_cidr == ["127.0.0.1/32"])' "$sb"
 
     # www. normalization + TLS_EMAIL
     out="$(run_env "TLS_DOMAIN=www.Sub.Example.com" "TLS_EMAIL=ops@example.com" render)"
