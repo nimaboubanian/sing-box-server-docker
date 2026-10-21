@@ -1,0 +1,31 @@
+networks:
+  vpndogs: { name: vpndogs }
+
+services:
+  tls-server:
+    build: { context: ., network: host }
+    image: nimaboubanian/sing-box-server:latest
+    ports:
+      - "80:80/tcp"
+      - "443:443/tcp"
+      - "127.0.0.1:1065:1065/tcp"
+    environment:
+      TLS_DOMAIN: ${TLS_DOMAIN:-}
+      TLS_USERS: ${TLS_USERS:-}
+      TLS_EMAIL: ${TLS_EMAIL:-}
+      CHAIN_SOCKS_HOST: ${CHAIN_SOCKS_HOST:-vpndogs-router}
+      CHAIN_SOCKS_PORT: ${CHAIN_SOCKS_PORT:-1070}
+      LOG_LEVEL: ${LOG_LEVEL:-warn}
+    networks: [vpndogs]
+    volumes:
+      - tls-certs:/var/lib/sing-box/acme
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/1065 && exec 4<>/dev/tcp/127.0.0.1/80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  tls-certs: {}
