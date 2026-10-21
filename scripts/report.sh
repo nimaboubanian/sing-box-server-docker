@@ -6,13 +6,13 @@ TLS_DOMAIN="${TLS_DOMAIN:-}"
 TLS_USERS="${TLS_USERS:-}"
 
 echo "== Processes =="
-if pgrep -x sing-box >/dev/null 2>&1; then
+if pidof sing-box >/dev/null 2>&1 || pgrep -f sing-box >/dev/null 2>&1; then
     echo "sing-box: UP"
 else
     echo "sing-box: DOWN"
 fi
 
-if pgrep -x nginx >/dev/null 2>&1; then
+if pidof nginx >/dev/null 2>&1 || pgrep -f nginx >/dev/null 2>&1; then
     echo "nginx: UP"
 else
     echo "nginx: DOWN"

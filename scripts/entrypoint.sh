@@ -246,6 +246,12 @@ render_singbox_conf() {
           "fallback": {
             "server": "127.0.0.1",
             "server_port": $fallback_port
+          },
+          "fallback_for_alpn": {
+            "http/1.1": {
+              "server": "127.0.0.1",
+              "server_port": $fallback_port
+            }
           }
         },
         {

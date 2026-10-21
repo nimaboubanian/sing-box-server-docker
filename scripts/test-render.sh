@@ -126,6 +126,7 @@ case_render() {
     assert_jq "trojan alpn http/1.1" '(.inbounds[] | select(.tag=="trojan-in") | .tls.alpn) == ["http/1.1"]' "$sb"
     assert_jq "trojan cert provider" '(.inbounds[] | select(.tag=="trojan-in") | .tls.certificate_provider) == "letsencrypt"' "$sb"
     assert_jq "trojan fallback port" '(.inbounds[] | select(.tag=="trojan-in") | .fallback.server_port) == 8080' "$sb"
+    assert_jq "trojan fallback_for_alpn" '(.inbounds[] | select(.tag=="trojan-in") | .fallback_for_alpn["http/1.1"].server_port) == 8080' "$sb"
     assert_jq "trojan users count"   '(.inbounds[] | select(.tag=="trojan-in") | .users | length) == 2' "$sb"
     assert_jq "socks inbound 1065"   '(.inbounds[] | select(.tag=="socks-in") | .listen_port) == 1065' "$sb"
     assert_jq "chain-out server"     '(.outbounds[] | select(.tag=="chain-out") | .server) == "vpndogs-router"' "$sb"
@@ -233,7 +234,12 @@ docker_cases() {
     has "http redirect location" "$http_redir" "https://"
 
     local https_out
-    https_out="$(docker exec "$cid" curl -sk --resolve domain.example:443:127.0.0.1 https://domain.example/ 2>&1 || true)"
+    https_out="$(docker exec "$cid" curl -skS --http1.1 --resolve domain.example:443:127.0.0.1 https://domain.example/ 2>&1 || true)"
+    if ! [[ "$https_out" == *'lang="fa"'* ]]; then
+        echo "DEBUG: https_out was: '$https_out'"
+        echo "DEBUG: container logs:"
+        docker logs "$cid" 2>&1 || true
+    fi
     has "https fallback serves fa" "$https_out" 'lang="fa"'
     has "https fallback serves rtl" "$https_out" 'dir="rtl"'
 
