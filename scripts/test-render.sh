@@ -97,7 +97,71 @@ case_validate() {
     run_is "valid www. domain"         0 run_env "TLS_DOMAIN=WWW.Example.COM" render
 }
 
+case_render() {
+    echo "=== RENDER CASES ==="
+    local out ng sb tmpcert
+    out="$(run_env render)" || { echo "render: FAIL"; fail=1; return; }
+    ng="$(block "nginx.conf" "$out")"
+    sb="$(block "sing-box/config.json" "$out")"
+
+    has "nginx listens on 0.0.0.0:80"     "$ng" "listen 0.0.0.0:80 default_server;"
+    has "nginx listens on 127.0.0.1:8080" "$ng" "listen 127.0.0.1:8080 default_server;"
+    has "nginx server_name apex+www"      "$ng" "server_name domain.example www.domain.example _;"
+    has "nginx proxies acme challenge"    "$ng" "proxy_pass http://127.0.0.1:8081;"
+    has "nginx redirects to https"        "$ng" 'return 301 https://$host$request_uri;'
+
+    assert_jq "acme provider type"   '.certificate_providers[0].type == "acme"' "$sb"
+    assert_jq "acme domains"         '.certificate_providers[0].domain == ["domain.example", "www.domain.example"]' "$sb"
+    assert_jq "acme alt http port"   '.certificate_providers[0].alternative_http_port == 8081' "$sb"
+    assert_jq "acme email omitted"   '(.certificate_providers[0] | has("email")) == false' "$sb"
+    assert_jq "trojan listen_port"   '(.inbounds[] | select(.tag=="trojan-in") | .listen_port) == 443' "$sb"
+    assert_jq "trojan alpn http/1.1" '(.inbounds[] | select(.tag=="trojan-in") | .tls.alpn) == ["http/1.1"]' "$sb"
+    assert_jq "trojan cert provider" '(.inbounds[] | select(.tag=="trojan-in") | .tls.certificate_provider) == "letsencrypt"' "$sb"
+    assert_jq "trojan fallback port" '(.inbounds[] | select(.tag=="trojan-in") | .fallback.server_port) == 8080' "$sb"
+    assert_jq "trojan users count"   '(.inbounds[] | select(.tag=="trojan-in") | .users | length) == 2' "$sb"
+    assert_jq "socks inbound 1065"   '(.inbounds[] | select(.tag=="socks-in") | .listen_port) == 1065' "$sb"
+    assert_jq "chain-out server"     '(.outbounds[] | select(.tag=="chain-out") | .server) == "vpndogs-router"' "$sb"
+    assert_jq "chain-out port"       '(.outbounds[] | select(.tag=="chain-out") | .server_port) == 1070' "$sb"
+
+    # www. normalization + TLS_EMAIL
+    out="$(run_env "TLS_DOMAIN=www.Sub.Example.com" "TLS_EMAIL=ops@example.com" render)"
+    sb="$(block "sing-box/config.json" "$out")"
+    assert_jq "www stripped to apex" '.certificate_providers[0].domain == ["sub.example.com", "www.sub.example.com"]' "$sb"
+    assert_jq "acme email set"       '.certificate_providers[0].email == "ops@example.com"' "$sb"
+
+    # Static cert mode when cert.pem + key.pem exist in ACME_DIR
+    tmpcert="$(mktemp -d)"
+    touch "$tmpcert/cert.pem" "$tmpcert/key.pem"
+    out="$( env ACME_DIR="$tmpcert" "${FIX_ENV[@]}" bash "$ENTRY" render )"
+    sb="$(block "sing-box/config.json" "$out")"
+    assert_jq "static cert omits providers" 'has("certificate_providers") == false' "$sb"
+    assert_jq "static cert sets certificate_path" '(.inbounds[] | select(.tag=="trojan-in") | .tls.certificate_path) == "'"$tmpcert"'/cert.pem"' "$sb"
+    rm -rf "$tmpcert"
+}
+
+case_client() {
+    echo "=== CLIENT-CONF CASES ==="
+    local uri json
+    uri="$(run_env client-conf alice)" || { echo "client-conf alice: FAIL"; fail=1; return; }
+    eq "alice trojan URI" "$uri" "trojan://s3cret@domain.example:443?security=tls&sni=domain.example&alpn=http%2F1.1&type=tcp#alice"
+
+    # Review Focus 1: password with colons and URL-special chars
+    uri="$(run_env "TLS_USERS=bob:p@ss:w/rd?1#2" client-conf bob)"
+    eq "bob special chars encoded" "$uri" "trojan://p%40ss%3Aw%2Frd%3F1%232@domain.example:443?security=tls&sni=domain.example&alpn=http%2F1.1&type=tcp#bob"
+
+    json="$(run_env client-conf alice --json)" || { echo "client-conf --json: FAIL"; fail=1; return; }
+    assert_jq "client json outbound trojan" '(.outbounds[] | select(.tag=="proxy") | .type) == "trojan"' "$json"
+    assert_jq "client json server"          '(.outbounds[] | select(.tag=="proxy") | .server) == "domain.example"' "$json"
+    assert_jq "client json password"        '(.outbounds[] | select(.tag=="proxy") | .password) == "s3cret"' "$json"
+    assert_jq "client json tls sni"         '(.outbounds[] | select(.tag=="proxy") | .tls.server_name) == "domain.example"' "$json"
+
+    run_is "unknown user exits 2" 2 run_env client-conf nobody
+    has    "unknown user named"   "$LAST_OUT" "nobody"
+}
+
 case_validate
+case_render
+case_client
 
 if [ "$fail" -ne 0 ]; then
     echo "FAILED" >&2

@@ -125,14 +125,266 @@ validate_env() {
     done
 }
 
+render_nginx_conf() {
+    cat <<EOF
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /run/nginx/nginx.pid;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    sendfile on;
+    keepalive_timeout 65;
+    access_log /var/log/nginx/access.log;
+
+    # Public HTTP: ACME HTTP-01 challenge proxy + HTTPS redirect
+    server {
+        listen 0.0.0.0:${HTTP_PORT} default_server;
+        listen [::]:${HTTP_PORT} default_server;
+        server_name ${APEX_DOMAIN} ${WWW_DOMAIN} _;
+
+        location ^~ /.well-known/acme-challenge/ {
+            proxy_pass http://127.0.0.1:${ACME_HTTP_PORT};
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+        }
+
+        location / {
+            return 301 https://\$host\$request_uri;
+        }
+    }
+
+    # Internal Loopback: Persian fake static website fallback
+    server {
+        listen 127.0.0.1:${FALLBACK_PORT} default_server;
+        server_name ${APEX_DOMAIN} ${WWW_DOMAIN} _;
+
+        root /var/www/html;
+        index index.html;
+
+        location / {
+            try_files \$uri \$uri/ /index.html =404;
+        }
+
+        error_page 404 /404.html;
+        location = /404.html {
+            internal;
+        }
+    }
+}
+EOF
+}
+
+render_singbox_conf() {
+    local has_static_cert=0
+    if [ -f "$ACME_DIR/cert.pem" ] && [ -f "$ACME_DIR/key.pem" ]; then
+        has_static_cert=1
+    fi
+
+    local users_json
+    users_json="$(
+        for u in "${USERS[@]}"; do
+            printf '%s\n' "$u"
+        done | jq -R -s '
+            split("\n") | map(select(length > 0) | split("\t")) |
+            map({name: .[0], password: .[1]})
+        '
+    )"
+
+    jq -n \
+        --arg log_level "$LOG_LEVEL" \
+        --argjson https_port "$HTTPS_PORT" \
+        --argjson fallback_port "$FALLBACK_PORT" \
+        --argjson socks_port "$SOCKS_PORT" \
+        --arg apex_domain "$APEX_DOMAIN" \
+        --arg www_domain "$WWW_DOMAIN" \
+        --arg chain_host "$CHAIN_SOCKS_HOST" \
+        --argjson chain_port "$CHAIN_SOCKS_PORT" \
+        --arg acme_dir "$ACME_DIR" \
+        --argjson acme_alt_port "$ACME_HTTP_PORT" \
+        --arg email "$TLS_EMAIL" \
+        --argjson has_static "$has_static_cert" \
+        --argjson users "$users_json" '
+    {
+      "log": {
+        "level": $log_level,
+        "timestamp": true
+      },
+      "dns": {},
+      "inbounds": [
+        {
+          "type": "trojan",
+          "tag": "trojan-in",
+          "listen": "::",
+          "listen_port": $https_port,
+          "tcp_fast_open": false,
+          "users": $users,
+          "tls": (
+            {
+              "enabled": true,
+              "server_name": $apex_domain,
+              "alpn": ["http/1.1"]
+            } + (
+              if $has_static == 1 then
+                {
+                  "certificate_path": ($acme_dir + "/cert.pem"),
+                  "key_path": ($acme_dir + "/key.pem")
+                }
+              else
+                {
+                  "certificate_provider": "letsencrypt"
+                }
+              end
+            )
+          ),
+          "fallback": {
+            "server": "127.0.0.1",
+            "server_port": $fallback_port
+          }
+        },
+        {
+          "type": "socks",
+          "tag": "socks-in",
+          "listen": "0.0.0.0",
+          "listen_port": $socks_port
+        }
+      ],
+      "outbounds": [
+        {
+          "type": "socks",
+          "tag": "chain-out",
+          "server": $chain_host,
+          "server_port": $chain_port,
+          "version": "5"
+        }
+      ],
+      "route": {
+        "auto_detect_interface": false,
+        "final": "chain-out",
+        "rules": []
+      }
+    } + (
+      if $has_static == 1 then
+        {}
+      else
+        {
+          "certificate_providers": [
+            (
+              {
+                "type": "acme",
+                "tag": "letsencrypt",
+                "domain": [$apex_domain, $www_domain],
+                "data_directory": $acme_dir,
+                "alternative_http_port": $acme_alt_port
+              } + (
+                if ($email | length) > 0 then
+                  {"email": $email}
+                else
+                  {}
+                end
+              )
+            )
+          ]
+        }
+      end
+    )'
+}
+
+urlencode() {
+    printf '%s' "$1" | jq -sRr @uri
+}
+
 cmd_render() {
     validate_env
-    # Stub for Task 1; implemented in Task 2
+    echo "# === nginx.conf ==="
+    render_nginx_conf
+    echo "# === sing-box/config.json ==="
+    render_singbox_conf
 }
 
 cmd_client_conf() {
     validate_env
-    # Stub for Task 1; implemented in Task 2
+    local target_user="${1:-}"
+    if [ -z "$target_user" ]; then
+        fatal "client-conf requires a username: entrypoint.sh client-conf <user> [--json]"
+    fi
+
+    local found_pass=""
+    for u in "${USERS[@]}"; do
+        local un="${u%%$'\t'*}"
+        local up="${u#*$'\t'}"
+        if [ "$un" = "$target_user" ]; then
+            found_pass="$up"
+            break
+        fi
+    done
+
+    if [ -z "$found_pass" ]; then
+        fatal "user '$target_user' not found in TLS_USERS"
+    fi
+
+    local format="${2:-}"
+    if [ "$format" = "--json" ]; then
+        jq -n \
+            --arg apex_domain "$APEX_DOMAIN" \
+            --argjson https_port "$HTTPS_PORT" \
+            --arg password "$found_pass" '
+        {
+          "log": {
+            "level": "warn",
+            "timestamp": true
+          },
+          "inbounds": [
+            {
+              "type": "socks",
+              "tag": "socks-in",
+              "listen": "127.0.0.1",
+              "listen_port": 1080
+            },
+            {
+              "type": "mixed",
+              "tag": "mixed-in",
+              "listen": "127.0.0.1",
+              "listen_port": 1081
+            }
+          ],
+          "outbounds": [
+            {
+              "type": "trojan",
+              "tag": "proxy",
+              "server": $apex_domain,
+              "server_port": $https_port,
+              "password": $password,
+              "tls": {
+                "enabled": true,
+                "server_name": $apex_domain,
+                "alpn": ["http/1.1"]
+              }
+            },
+            {
+              "type": "direct",
+              "tag": "direct"
+            }
+          ],
+          "route": {
+            "auto_detect_interface": true,
+            "final": "proxy",
+            "rules": []
+          }
+        }'
+    else
+        local enc_pass
+        local enc_tag
+        enc_pass="$(urlencode "$found_pass")"
+        enc_tag="$(urlencode "$target_user")"
+        printf 'trojan://%s@%s:%s?security=tls&sni=%s&alpn=http%%2F1.1&type=tcp#%s\n' \
+            "$enc_pass" "$APEX_DOMAIN" "$HTTPS_PORT" "$APEX_DOMAIN" "$enc_tag"
+    fi
 }
 
 main() {
